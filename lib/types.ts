@@ -35,3 +35,33 @@ export type DiagnosisInput = {
   missedWords: number;
   listeningDifficulty: number;
 };
+
+export type ChallengeChoice = {
+  id: string;
+  text: string;
+  correct?: boolean;
+  hint?: string;
+};
+
+export type Challenge = {
+  id: string;
+  type: "choice" | "order" | "listen";
+  area: SkillArea;
+  prompt: string;
+  support: string;
+  explanation: string;
+  xp: number;
+  choices: ChallengeChoice[];
+  answer: string[];
+};
+
+export type GameLesson = {
+  id: string;
+  title: string;
+  emoji: string;
+  area: SkillArea;
+  summary: string;
+  rewardXp: number;
+  difficulty: "easy" | "medium" | "hard";
+  challenges: Challenge[];
+};
