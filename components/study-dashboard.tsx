@@ -1,10 +1,30 @@
 "use client";
 
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
-import { coachSuggestions, defaultUsers, grammarDeck, speakingHints, starterWeaknesses, vocabularyDeck } from "@/lib/mock-data";
-import { AppUser, ConversationMessage, GrammarCard, UserProgress, Weakness } from "@/lib/types";
+import { Session } from "@supabase/supabase-js";
+import {
+  coachSuggestions,
+  defaultUsers,
+  grammarDeck,
+  speakingHints,
+  starterWeaknesses,
+  vocabularyDeck
+} from "@/lib/mock-data";
+import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
+import { AppUser, ConversationMessage, UserProgress, Weakness } from "@/lib/types";
 
 type Tab = "vocabulary" | "grammar" | "conversation" | "profile";
+type ProfileRow = {
+  slot: "takuro" | "kazumi";
+  display_name: string;
+  avatar_url: string | null;
+};
+type ProgressRow = {
+  vocabulary_index: number;
+  grammar_index: number;
+  grammar_score: number;
+  conversation_history: ConversationMessage[];
+};
 
 type SpeechRecognitionInstance = {
   continuous: boolean;
@@ -26,11 +46,11 @@ type WindowWithSpeech = Window & {
   SpeechRecognition?: new () => SpeechRecognitionInstance;
 };
 
-const usersStorageKey = "english-quest-users";
-const activeUserStorageKey = "english-quest-active-user";
+const fallbackUsersKey = "english-quest-fallback-users";
+const fallbackSessionKey = "english-quest-fallback-session";
 
-function progressStorageKey(userId: string) {
-  return `english-quest-progress-${userId}`;
+function fallbackProgressKey(userId: string) {
+  return `english-quest-fallback-progress-${userId}`;
 }
 
 function defaultProgress(): UserProgress {
@@ -48,7 +68,17 @@ function defaultProgress(): UserProgress {
   };
 }
 
+function loginEmailForSlot(slot: AppUser["id"]) {
+  if (slot === "takuro") {
+    return process.env.NEXT_PUBLIC_TAKURO_LOGIN_EMAIL ?? "takuro@english-quest.app";
+  }
+
+  return process.env.NEXT_PUBLIC_KAZUMI_LOGIN_EMAIL ?? "kazumi@english-quest.app";
+}
+
 export function StudyDashboard() {
+  const supabase = getSupabaseBrowserClient();
+  const supabaseEnabled = isSupabaseConfigured() && Boolean(supabase);
   const [users, setUsers] = useState<AppUser[]>(defaultUsers);
   const [selectedUserId, setSelectedUserId] = useState<AppUser["id"]>("takuro");
   const [loggedInUserId, setLoggedInUserId] = useState<AppUser["id"] | null>(null);
@@ -56,7 +86,7 @@ export function StudyDashboard() {
   const [loginError, setLoginError] = useState("");
   const [activeTab, setActiveTab] = useState<Tab>("vocabulary");
   const [progress, setProgress] = useState<UserProgress>(defaultProgress());
-  const [grammarFeedback, setGrammarFeedback] = useState<string>("");
+  const [grammarFeedback, setGrammarFeedback] = useState("");
   const [changePasswordForm, setChangePasswordForm] = useState({
     current: "",
     next: "",
@@ -68,6 +98,8 @@ export function StudyDashboard() {
   const [coachLoading, setCoachLoading] = useState(false);
   const [manualMessage, setManualMessage] = useState("");
   const [speechError, setSpeechError] = useState("");
+  const [bootstrapped, setBootstrapped] = useState(false);
+  const [session, setSession] = useState<Session | null>(null);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
 
   const weaknesses = starterWeaknesses;
@@ -79,31 +111,14 @@ export function StudyDashboard() {
     () => users.find((user) => user.id === loggedInUserId) ?? null,
     [loggedInUserId, users]
   );
-
   const currentWord = vocabularyDeck[progress.vocabularyIndex] ?? vocabularyDeck[0];
   const currentGrammar = grammarDeck[progress.grammarIndex] ?? grammarDeck[0];
 
   useEffect(() => {
-    const storedUsers = window.localStorage.getItem(usersStorageKey);
-    const storedActiveUser = window.localStorage.getItem(activeUserStorageKey) as AppUser["id"] | null;
     const speechWindow = window as WindowWithSpeech;
     const Recognition = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
 
-    if (storedUsers) {
-      const parsed = JSON.parse(storedUsers) as AppUser[];
-      setUsers(parsed);
-    } else {
-      window.localStorage.setItem(usersStorageKey, JSON.stringify(defaultUsers));
-    }
-
-    if (storedActiveUser) {
-      setLoggedInUserId(storedActiveUser);
-      setSelectedUserId(storedActiveUser);
-      loadProgress(storedActiveUser);
-    }
-
     if (Recognition) {
-      setMicSupported(true);
       const recognition = new Recognition();
       recognition.continuous = false;
       recognition.interimResults = false;
@@ -123,35 +138,190 @@ export function StudyDashboard() {
         setListening(false);
       };
       recognitionRef.current = recognition;
+      setMicSupported(true);
     }
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(usersStorageKey, JSON.stringify(users));
-  }, [users]);
+    if (!supabaseEnabled || !supabase) {
+      loadFallbackUsers();
+      return;
+    }
+
+    void fetch("/api/setup-users", { method: "POST" }).finally(() => {
+      setBootstrapped(true);
+    });
+
+    void loadSupabaseProfiles();
+
+    supabase.auth.getSession().then(({ data }) => {
+      setSession(data.session);
+      if (data.session?.user) {
+        void restoreSupabaseUser(data.session.user.id);
+      }
+    });
+
+    const {
+      data: { subscription }
+    } = supabase.auth.onAuthStateChange((_event, nextSession) => {
+      setSession(nextSession);
+      if (nextSession?.user) {
+        void restoreSupabaseUser(nextSession.user.id);
+      } else {
+        setLoggedInUserId(null);
+      }
+    });
+
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, [supabase, supabaseEnabled]);
 
   useEffect(() => {
-    if (!loggedInUserId) {
+    if (supabaseEnabled || !loggedInUserId) {
       return;
     }
 
-    window.localStorage.setItem(activeUserStorageKey, loggedInUserId);
-    window.localStorage.setItem(progressStorageKey(loggedInUserId), JSON.stringify(progress));
-  }, [loggedInUserId, progress]);
+    window.localStorage.setItem(fallbackProgressKey(loggedInUserId), JSON.stringify(progress));
+  }, [loggedInUserId, progress, supabaseEnabled]);
 
-  function loadProgress(userId: AppUser["id"]) {
-    const saved = window.localStorage.getItem(progressStorageKey(userId));
-
-    if (!saved) {
-      setProgress(defaultProgress());
+  async function loadSupabaseProfiles() {
+    if (!supabase) {
       return;
     }
 
-    setProgress(JSON.parse(saved) as UserProgress);
+    const { data } = await supabase
+      .from("profiles")
+      .select("slot, display_name, avatar_url")
+      .order("display_name");
+
+    if (!data?.length) {
+      return;
+    }
+
+    const rows = data as unknown as ProfileRow[];
+    const mapped = rows
+      .filter((row) => row.slot === "takuro" || row.slot === "kazumi")
+      .map((row) => ({
+        id: row.slot as AppUser["id"],
+        name: row.display_name,
+        password: "",
+        avatar: row.avatar_url ?? undefined
+      }));
+
+    if (mapped.length) {
+      setUsers((current) =>
+        current.map((user) => mapped.find((item) => item.id === user.id) ?? user)
+      );
+    }
   }
 
-  function handleLogin(event: FormEvent<HTMLFormElement>) {
+  async function restoreSupabaseUser(authUserId: string) {
+    if (!supabase) {
+      return;
+    }
+
+    const [{ data: profile }, { data: savedProgress }] = await Promise.all([
+      supabase
+        .from("profiles")
+        .select("slot, display_name, avatar_url")
+        .eq("id", authUserId)
+        .single(),
+      supabase
+        .from("study_progress")
+        .select("vocabulary_index, grammar_index, grammar_score, conversation_history")
+        .eq("user_id", authUserId)
+        .single()
+    ]);
+
+    const profileRow = profile as unknown as ProfileRow | null;
+    const progressRow = savedProgress as unknown as ProgressRow | null;
+
+    if (profileRow?.slot === "takuro" || profileRow?.slot === "kazumi") {
+      const appUserId = profileRow.slot as AppUser["id"];
+      setLoggedInUserId(appUserId);
+      setSelectedUserId(appUserId);
+      setUsers((current) =>
+        current.map((user) =>
+          user.id === appUserId
+            ? {
+                ...user,
+                name: profileRow.display_name,
+                avatar: profileRow.avatar_url ?? undefined
+              }
+            : user
+        )
+      );
+    }
+
+    if (progressRow) {
+      setProgress({
+        vocabularyIndex: progressRow.vocabulary_index ?? 0,
+        grammarIndex: progressRow.grammar_index ?? 0,
+        grammarScore: progressRow.grammar_score ?? 0,
+        conversationHistory:
+          progressRow.conversation_history ?? defaultProgress().conversationHistory
+      });
+    } else {
+      setProgress(defaultProgress());
+    }
+  }
+
+  function loadFallbackUsers() {
+    const storedUsers = window.localStorage.getItem(fallbackUsersKey);
+    const storedSession = window.localStorage.getItem(fallbackSessionKey) as AppUser["id"] | null;
+
+    if (storedUsers) {
+      setUsers(JSON.parse(storedUsers) as AppUser[]);
+    } else {
+      window.localStorage.setItem(fallbackUsersKey, JSON.stringify(defaultUsers));
+    }
+
+    if (storedSession) {
+      setLoggedInUserId(storedSession);
+      setSelectedUserId(storedSession);
+      const savedProgress = window.localStorage.getItem(fallbackProgressKey(storedSession));
+      setProgress(savedProgress ? (JSON.parse(savedProgress) as UserProgress) : defaultProgress());
+    }
+  }
+
+  async function persistProgress(nextProgress: UserProgress) {
+    setProgress(nextProgress);
+
+    if (supabaseEnabled && supabase && session?.user) {
+      await (supabase.from("study_progress") as any).upsert({
+        user_id: session.user.id,
+        vocabulary_index: nextProgress.vocabularyIndex,
+        grammar_index: nextProgress.grammarIndex,
+        grammar_score: nextProgress.grammarScore,
+        conversation_history: nextProgress.conversationHistory
+      });
+      return;
+    }
+
+    if (loggedInUserId) {
+      window.localStorage.setItem(fallbackProgressKey(loggedInUserId), JSON.stringify(nextProgress));
+    }
+  }
+
+  async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    setLoginError("");
+
+    if (supabaseEnabled && supabase) {
+      const { error } = await supabase.auth.signInWithPassword({
+        email: loginEmailForSlot(selectedUserId),
+        password: loginPassword
+      });
+
+      if (error) {
+        setLoginError("ログインに失敗しました。パスワードを確認してください。");
+        return;
+      }
+
+      setLoginPassword("");
+      return;
+    }
 
     if (selectedUser.password !== loginPassword) {
       setLoginError("パスワードが違います。");
@@ -160,49 +330,55 @@ export function StudyDashboard() {
 
     setLoggedInUserId(selectedUser.id);
     setLoginPassword("");
-    setLoginError("");
-    setProfileMessage("");
-    loadProgress(selectedUser.id);
+    window.localStorage.setItem(fallbackSessionKey, selectedUser.id);
+    const savedProgress = window.localStorage.getItem(fallbackProgressKey(selectedUser.id));
+    setProgress(savedProgress ? (JSON.parse(savedProgress) as UserProgress) : defaultProgress());
   }
 
-  function handleLogout() {
+  async function handleLogout() {
+    if (supabaseEnabled && supabase) {
+      await supabase.auth.signOut();
+      return;
+    }
+
     setLoggedInUserId(null);
-    window.localStorage.removeItem(activeUserStorageKey);
+    window.localStorage.removeItem(fallbackSessionKey);
   }
 
-  function goToNextWord() {
-    setProgress((current) => ({
-      ...current,
-      vocabularyIndex: (current.vocabularyIndex + 1) % vocabularyDeck.length
-    }));
+  async function goToNextWord() {
+    await persistProgress({
+      ...progress,
+      vocabularyIndex: (progress.vocabularyIndex + 1) % vocabularyDeck.length
+    });
   }
 
-  function goToPrevWord() {
-    setProgress((current) => ({
-      ...current,
+  async function goToPrevWord() {
+    await persistProgress({
+      ...progress,
       vocabularyIndex:
-        current.vocabularyIndex === 0 ? vocabularyDeck.length - 1 : current.vocabularyIndex - 1
-    }));
+        progress.vocabularyIndex === 0 ? vocabularyDeck.length - 1 : progress.vocabularyIndex - 1
+    });
   }
 
-  function answerGrammar(option: string, card: GrammarCard) {
-    const correct = option === card.answer;
-    setProgress((current) => ({
-      ...current,
-      grammarScore: correct ? current.grammarScore + 1 : current.grammarScore
-    }));
+  async function answerGrammar(option: string) {
+    const correct = option === currentGrammar.answer;
+    const nextProgress = {
+      ...progress,
+      grammarScore: correct ? progress.grammarScore + 1 : progress.grammarScore
+    };
+    await persistProgress(nextProgress);
     setGrammarFeedback(
       correct
-        ? `正解です。${card.explanation}`
-        : `今回はこっちが自然です: "${card.answer}"。${card.explanation}`
+        ? `正解です。${currentGrammar.explanation}`
+        : `今回はこっちが自然です: "${currentGrammar.answer}"。${currentGrammar.explanation}`
     );
   }
 
-  function nextGrammar() {
-    setProgress((current) => ({
-      ...current,
-      grammarIndex: (current.grammarIndex + 1) % grammarDeck.length
-    }));
+  async function nextGrammar() {
+    await persistProgress({
+      ...progress,
+      grammarIndex: (progress.grammarIndex + 1) % grammarDeck.length
+    });
     setGrammarFeedback("");
   }
 
@@ -223,10 +399,11 @@ export function StudyDashboard() {
     }
 
     setCoachLoading(true);
-    setProgress((current) => ({
-      ...current,
-      conversationHistory: [...current.conversationHistory, { role: "user", text }]
-    }));
+    const withUserMessage: UserProgress = {
+      ...progress,
+      conversationHistory: [...progress.conversationHistory, { role: "user", text } as const]
+    };
+    await persistProgress(withUserMessage);
 
     try {
       const response = await fetch("/api/coach", {
@@ -242,10 +419,14 @@ export function StudyDashboard() {
       });
 
       const data = (await response.json()) as { reply: string };
-      setProgress((current) => ({
-        ...current,
-        conversationHistory: [...current.conversationHistory, { role: "ai", text: data.reply }]
-      }));
+      const nextProgress: UserProgress = {
+        ...withUserMessage,
+        conversationHistory: [
+          ...withUserMessage.conversationHistory,
+          { role: "ai", text: data.reply } as const
+        ]
+      };
+      await persistProgress(nextProgress);
       speakText(data.reply);
     } finally {
       setCoachLoading(false);
@@ -265,7 +446,6 @@ export function StudyDashboard() {
 
   async function handleManualSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-
     const text = manualMessage.trim();
 
     if (!text) {
@@ -276,33 +456,55 @@ export function StudyDashboard() {
     await submitConversation(text);
   }
 
-  function handleAvatarChange(event: ChangeEvent<HTMLInputElement>) {
+  async function handleAvatarChange(event: ChangeEvent<HTMLInputElement>) {
     const file = event.target.files?.[0];
 
     if (!file || !loggedInUser) {
       return;
     }
 
+    if (supabaseEnabled && supabase && session?.user) {
+      const filePath = `${session.user.id}/avatar-${Date.now()}`;
+      const { error } = await supabase.storage.from("avatars").upload(filePath, file, {
+        upsert: true
+      });
+
+      if (error) {
+        setProfileMessage("画像の保存に失敗しました。");
+        return;
+      }
+
+      const { data } = supabase.storage.from("avatars").getPublicUrl(filePath);
+      await (supabase.from("profiles") as any)
+        .update({ avatar_url: data.publicUrl })
+        .eq("id", session.user.id);
+
+      setUsers((current) =>
+        current.map((user) =>
+          user.id === loggedInUser.id ? { ...user, avatar: data.publicUrl } : user
+        )
+      );
+      setProfileMessage("プロフィール画像を更新しました。");
+      return;
+    }
+
     const reader = new FileReader();
     reader.onload = () => {
       const avatar = typeof reader.result === "string" ? reader.result : "";
-      setUsers((current) =>
-        current.map((user) => (user.id === loggedInUser.id ? { ...user, avatar } : user))
+      const nextUsers = users.map((user) =>
+        user.id === loggedInUser.id ? { ...user, avatar } : user
       );
+      setUsers(nextUsers);
+      window.localStorage.setItem(fallbackUsersKey, JSON.stringify(nextUsers));
       setProfileMessage("プロフィール画像を更新しました。");
     };
     reader.readAsDataURL(file);
   }
 
-  function handlePasswordChange(event: FormEvent<HTMLFormElement>) {
+  async function handlePasswordChange(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
 
     if (!loggedInUser) {
-      return;
-    }
-
-    if (changePasswordForm.current !== loggedInUser.password) {
-      setProfileMessage("現在のパスワードが違います。");
       return;
     }
 
@@ -312,15 +514,35 @@ export function StudyDashboard() {
     }
 
     if (changePasswordForm.next !== changePasswordForm.confirm) {
-      setProfileMessage("新しいパスワードの確認が一致しません。");
+      setProfileMessage("新しいパスワード確認が一致しません。");
       return;
     }
 
-    setUsers((current) =>
-      current.map((user) =>
-        user.id === loggedInUser.id ? { ...user, password: changePasswordForm.next } : user
-      )
+    if (supabaseEnabled && supabase) {
+      const { error } = await supabase.auth.updateUser({
+        password: changePasswordForm.next
+      });
+
+      if (error) {
+        setProfileMessage("パスワード変更に失敗しました。");
+        return;
+      }
+
+      setChangePasswordForm({ current: "", next: "", confirm: "" });
+      setProfileMessage("パスワードを変更しました。");
+      return;
+    }
+
+    if (changePasswordForm.current !== loggedInUser.password) {
+      setProfileMessage("現在のパスワードが違います。");
+      return;
+    }
+
+    const nextUsers = users.map((user) =>
+      user.id === loggedInUser.id ? { ...user, password: changePasswordForm.next } : user
     );
+    setUsers(nextUsers);
+    window.localStorage.setItem(fallbackUsersKey, JSON.stringify(nextUsers));
     setChangePasswordForm({ current: "", next: "", confirm: "" });
     setProfileMessage("パスワードを変更しました。");
   }
@@ -335,6 +557,13 @@ export function StudyDashboard() {
             <p>
               ブラウザですぐ使える英語勉強アプリです。拓郎用・和美用の2ユーザーを切り替えて、それぞれ別のプロフィールで使えます。
             </p>
+            <div className="inline-message">
+              {supabaseEnabled
+                ? bootstrapped
+                  ? "Supabase 本番ログインが有効です。"
+                  : "Supabase 初期化中..."
+                : "今はローカル保存モードです。Supabase を設定すると本物のログインになります。"}
+            </div>
           </div>
 
           <div className="panel stack">
@@ -388,7 +617,7 @@ export function StudyDashboard() {
         <div className="header-actions">
           <div className="mini-pill">単語 {progress.vocabularyIndex + 1}/{vocabularyDeck.length}</div>
           <div className="mini-pill">文法スコア {progress.grammarScore}</div>
-          <button className="ghost-button" onClick={handleLogout} type="button">
+          <button className="ghost-button" onClick={() => void handleLogout()} type="button">
             ログアウト
           </button>
         </div>
@@ -421,10 +650,10 @@ export function StudyDashboard() {
               <p>{currentWord.tip}</p>
             </div>
             <div className="button-row">
-              <button className="ghost-button" onClick={goToPrevWord} type="button">
+              <button className="ghost-button" onClick={() => void goToPrevWord()} type="button">
                 前の単語
               </button>
-              <button className="primary-button" onClick={goToNextWord} type="button">
+              <button className="primary-button" onClick={() => void goToNextWord()} type="button">
                 次の単語
               </button>
             </div>
@@ -471,7 +700,7 @@ export function StudyDashboard() {
                 <button
                   className="option-button"
                   key={option}
-                  onClick={() => answerGrammar(option, currentGrammar)}
+                  onClick={() => void answerGrammar(option)}
                   type="button"
                 >
                   {option}
@@ -479,7 +708,7 @@ export function StudyDashboard() {
               ))}
             </div>
             {grammarFeedback ? <div className="inline-message">{grammarFeedback}</div> : null}
-            <button className="secondary-button" onClick={nextGrammar} type="button">
+            <button className="secondary-button" onClick={() => void nextGrammar()} type="button">
               次の文法へ
             </button>
           </aside>
@@ -562,7 +791,7 @@ export function StudyDashboard() {
               <div className="stack">
                 <label className="field">
                   <span>プロフィール画像</span>
-                  <input accept="image/*" className="text-input" type="file" onChange={handleAvatarChange} />
+                  <input accept="image/*" className="text-input" type="file" onChange={(event) => void handleAvatarChange(event)} />
                 </label>
               </div>
             </div>
@@ -570,18 +799,20 @@ export function StudyDashboard() {
 
           <aside className="panel stack">
             <span className="section-label">Security</span>
-            <form className="stack" onSubmit={handlePasswordChange}>
-              <label className="field">
-                <span>現在のパスワード</span>
-                <input
-                  className="text-input"
-                  type="password"
-                  value={changePasswordForm.current}
-                  onChange={(event) =>
-                    setChangePasswordForm((current) => ({ ...current, current: event.target.value }))
-                  }
-                />
-              </label>
+            <form className="stack" onSubmit={(event) => void handlePasswordChange(event)}>
+              {!supabaseEnabled ? (
+                <label className="field">
+                  <span>現在のパスワード</span>
+                  <input
+                    className="text-input"
+                    type="password"
+                    value={changePasswordForm.current}
+                    onChange={(event) =>
+                      setChangePasswordForm((current) => ({ ...current, current: event.target.value }))
+                    }
+                  />
+                </label>
+              ) : null}
               <label className="field">
                 <span>新しいパスワード</span>
                 <input

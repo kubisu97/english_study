@@ -1,50 +1,21 @@
 # English Quest
 
-ワーキングホリデー前に、日常英会話をゲーム感覚で学ぶためのブラウザアプリです。
+ワーキングホリデーに向けて、`単語 / 文法 / 英会話` を2人それぞれで学べるブラウザアプリです。
 
-## どんなアプリ？
+## 今の構成
 
-このアプリは `Duolingoっぽく直感的に進める` ことを目指した英語学習アプリです。
+- ユーザー選択: `拓郎` / `和美`
+- ログイン: パスワード式
+- 学習画面: `単語` `文法` `英会話` `プロフィール`
+- 英会話: マイク起動 + AIサポート
+- プロフィール: 画像変更 / パスワード変更
+- 保存: Supabase Auth / DB / Storage
 
-- 1問ずつテンポよく進める
-- 単語、文法、リスニング、会話をまとめて学ぶ
-- XP、ハート、連続学習日数の感覚で進める
-- スマホでもPCでもブラウザで使う
-- 必要に応じて AI コーチと短文英会話ができる
+## 公開URL
 
-## 想定している使い方
+Vercel に公開して使う前提です。
 
-ローカル専用ではなく、**ブラウザでいつでも開いて使う** 想定です。
-
-おすすめ構成:
-
-- コード管理: `GitHub`
-- 公開: `Vercel`
-
-## 今の学習体験
-
-### 学習ルート
-
-- レッスンを順番に進める
-- 苦手分野を見ながら今日やる内容を決める
-- ワーホリ向けの単語をすぐ確認できる
-
-### 今のレッスン
-
-- 4択問題
-- 並び替え問題
-- リスニングっぽい意味選択
-
-をテンポよく進められます。
-
-### AIコーチ
-
-- 自分で英語を書いて送る
-- 自然な英語に直してもらう
-- 日本語の短い説明をもらう
-- 次に返す英語をもらう
-
-## ローカル確認したいとき
+## ローカル確認
 
 ```bash
 npm install
@@ -52,56 +23,91 @@ cp .env.example .env.local
 npm run dev
 ```
 
-ブラウザで `http://localhost:3000` を開きます。
+ブラウザで `http://localhost:3000`
 
-## 環境変数
-
-`.env.local`
+## 必須環境変数
 
 ```env
-OPENAI_API_KEY=your_openai_api_key_here
+OPENAI_API_KEY=
 OPENAI_MODEL=gpt-4.1-mini
+NEXT_PUBLIC_SUPABASE_URL=
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+NEXT_PUBLIC_TAKURO_LOGIN_EMAIL=takuro@english-quest.app
+NEXT_PUBLIC_KAZUMI_LOGIN_EMAIL=kazumi@english-quest.app
+TAKURO_LOGIN_EMAIL=takuro@english-quest.app
+KAZUMI_LOGIN_EMAIL=kazumi@english-quest.app
+TAKURO_INITIAL_PASSWORD=takuro123
+KAZUMI_INITIAL_PASSWORD=kazumi123
 ```
 
-`OPENAI_API_KEY` が未設定でも画面は動きます。  
-その場合は AI コーチが簡易のフォールバック返答を返します。
+## Supabase セットアップ
 
-## 公開方法
+### 1. Supabase プロジェクトを作る
 
-### 1. GitHub に push する
+Free Plan でOKです。
 
-このリポジトリを GitHub に上げます。
+### 2. SQLを流す
 
-### 2. Vercel に接続する
+`supabase/schema.sql` を Supabase の SQL Editor で実行します。
 
-Vercel で GitHub リポジトリを読み込みます。
+これで以下が作られます。
 
-### 3. 環境変数を設定する
+- `profiles` テーブル
+- `study_progress` テーブル
+- `avatars` バケット
+- RLS ポリシー
+
+### 3. Vercel に環境変数を入れる
 
 Vercel に以下を設定します。
 
+- `NEXT_PUBLIC_SUPABASE_URL`
+- `NEXT_PUBLIC_SUPABASE_ANON_KEY`
+- `SUPABASE_SERVICE_ROLE_KEY`
 - `OPENAI_API_KEY`
 - `OPENAI_MODEL`
+- `NEXT_PUBLIC_TAKURO_LOGIN_EMAIL`
+- `NEXT_PUBLIC_KAZUMI_LOGIN_EMAIL`
+- `TAKURO_LOGIN_EMAIL`
+- `KAZUMI_LOGIN_EMAIL`
+- `TAKURO_INITIAL_PASSWORD`
+- `KAZUMI_INITIAL_PASSWORD`
 
-### 4. Deploy する
+### 4. 初回アクセス時にユーザーを自動作成
 
-デプロイ後に発行される URL を開けば、スマホでもPCでも使えます。
+アプリは `/api/setup-users` を通して、初回アクセス時に以下の2ユーザーを自動で用意します。
+
+- 拓郎
+- 和美
+
+## 使い方
+
+### 単語
+
+- 1語ずつ確認
+- 意味と例文と覚え方を見る
+
+### 文法
+
+- よく使う型を覚える
+- すぐ下でミニクイズ
+
+### 英会話
+
+- マイクを起動
+- 英語で話す
+- AIが自然な言い方と次に言う文を返す
+
+### プロフィール
+
+- 画像を登録
+- パスワードを変更
 
 ## 主なファイル
 
 - `components/study-dashboard.tsx`
-  画面本体。ゲームっぽい学習体験をまとめています。
-- `lib/mock-data.ts`
-  レッスン問題、単語、弱点データです。
 - `app/api/coach/route.ts`
-  OpenAI を使う AI コーチ用 API です。
-- `app/globals.css`
-  スマホ対応を含む全体デザインです。
-
-## 次に強くしたい機能
-
-1. 音声入力で発音練習
-2. 正答率に応じた難易度調整
-3. 学習履歴の保存
-4. 本物の発音評価
-5. AI が苦手傾向から次の問題を自動生成
+- `app/api/setup-users/route.ts`
+- `lib/supabase.ts`
+- `supabase/schema.sql`
