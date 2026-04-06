@@ -1,4 +1,4 @@
-import { AppUser, GrammarCard, VocabularyCard, Weakness } from "@/lib/types";
+import { AppUser, GrammarCard, PersonalizedStudyPack, VocabularyCard, Weakness } from "@/lib/types";
 
 export const defaultUsers: AppUser[] = [
   {
@@ -115,6 +115,13 @@ export const coachSuggestions = [
   "Can I work at a cafe if my English is not perfect yet?",
   "How can I make friends at work?"
 ];
+
+export const fallbackStudyPack: PersonalizedStudyPack = {
+  focusSummary: "まずは仕事・生活・友達作りに直結する英語を、短く自然に言える状態を目指します。",
+  vocabulary: vocabularyDeck,
+  grammar: grammarDeck,
+  conversationPrompts: coachSuggestions
+};
 
 export const speakingHints = [
   "まずは短く1文で答える",

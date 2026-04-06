@@ -99,3 +99,10 @@ export type UserProgress = {
   grammarScore: number;
   conversationHistory: ConversationMessage[];
 };
+
+export type PersonalizedStudyPack = {
+  focusSummary: string;
+  vocabulary: VocabularyCard[];
+  grammar: GrammarCard[];
+  conversationPrompts: string[];
+};

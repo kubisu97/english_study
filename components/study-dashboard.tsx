@@ -3,15 +3,15 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Session } from "@supabase/supabase-js";
 import {
-  coachSuggestions,
   defaultUsers,
+  fallbackStudyPack,
   grammarDeck,
   speakingHints,
   starterWeaknesses,
   vocabularyDeck
 } from "@/lib/mock-data";
 import { getSupabaseBrowserClient, isSupabaseConfigured } from "@/lib/supabase";
-import { AppUser, ConversationMessage, UserProgress, Weakness } from "@/lib/types";
+import { AppUser, ConversationMessage, PersonalizedStudyPack, UserProgress, Weakness } from "@/lib/types";
 
 type Tab = "vocabulary" | "grammar" | "conversation" | "profile";
 type ProfileRow = {
@@ -100,6 +100,8 @@ export function StudyDashboard() {
   const [speechError, setSpeechError] = useState("");
   const [bootstrapped, setBootstrapped] = useState(false);
   const [session, setSession] = useState<Session | null>(null);
+  const [studyPack, setStudyPack] = useState<PersonalizedStudyPack>(fallbackStudyPack);
+  const [packLoading, setPackLoading] = useState(false);
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
 
   const weaknesses = starterWeaknesses;
@@ -111,8 +113,12 @@ export function StudyDashboard() {
     () => users.find((user) => user.id === loggedInUserId) ?? null,
     [loggedInUserId, users]
   );
-  const currentWord = vocabularyDeck[progress.vocabularyIndex] ?? vocabularyDeck[0];
-  const currentGrammar = grammarDeck[progress.grammarIndex] ?? grammarDeck[0];
+  const currentWord =
+    studyPack.vocabulary[progress.vocabularyIndex % studyPack.vocabulary.length] ??
+    vocabularyDeck[0];
+  const currentGrammar =
+    studyPack.grammar[progress.grammarIndex % studyPack.grammar.length] ??
+    grammarDeck[0];
 
   useEffect(() => {
     const speechWindow = window as WindowWithSpeech;
@@ -255,15 +261,18 @@ export function StudyDashboard() {
     }
 
     if (progressRow) {
-      setProgress({
+      const nextProgress = {
         vocabularyIndex: progressRow.vocabulary_index ?? 0,
         grammarIndex: progressRow.grammar_index ?? 0,
         grammarScore: progressRow.grammar_score ?? 0,
         conversationHistory:
           progressRow.conversation_history ?? defaultProgress().conversationHistory
-      });
+      };
+      setProgress(nextProgress);
+      await loadPersonalizedPack(profileRow?.display_name ?? "Learner", nextProgress);
     } else {
       setProgress(defaultProgress());
+      await loadPersonalizedPack(profileRow?.display_name ?? "Learner", defaultProgress());
     }
   }
 
@@ -304,6 +313,31 @@ export function StudyDashboard() {
     }
   }
 
+  async function loadPersonalizedPack(userName: string, currentProgress: UserProgress) {
+    setPackLoading(true);
+
+    try {
+      const response = await fetch("/api/personalize", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          userName,
+          progress: currentProgress
+        })
+      });
+
+      const data = (await response.json()) as { pack?: PersonalizedStudyPack };
+
+      if (data.pack) {
+        setStudyPack(data.pack);
+      }
+    } finally {
+      setPackLoading(false);
+    }
+  }
+
   async function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     setLoginError("");
@@ -332,7 +366,9 @@ export function StudyDashboard() {
     setLoginPassword("");
     window.localStorage.setItem(fallbackSessionKey, selectedUser.id);
     const savedProgress = window.localStorage.getItem(fallbackProgressKey(selectedUser.id));
-    setProgress(savedProgress ? (JSON.parse(savedProgress) as UserProgress) : defaultProgress());
+    const nextProgress = savedProgress ? (JSON.parse(savedProgress) as UserProgress) : defaultProgress();
+    setProgress(nextProgress);
+    await loadPersonalizedPack(selectedUser.name, nextProgress);
   }
 
   async function handleLogout() {
@@ -346,18 +382,20 @@ export function StudyDashboard() {
   }
 
   async function goToNextWord() {
-    await persistProgress({
+    const nextProgress = {
       ...progress,
-      vocabularyIndex: (progress.vocabularyIndex + 1) % vocabularyDeck.length
-    });
+      vocabularyIndex: (progress.vocabularyIndex + 1) % studyPack.vocabulary.length
+    };
+    await persistProgress(nextProgress);
   }
 
   async function goToPrevWord() {
-    await persistProgress({
+    const nextProgress = {
       ...progress,
       vocabularyIndex:
-        progress.vocabularyIndex === 0 ? vocabularyDeck.length - 1 : progress.vocabularyIndex - 1
-    });
+        progress.vocabularyIndex === 0 ? studyPack.vocabulary.length - 1 : progress.vocabularyIndex - 1
+    };
+    await persistProgress(nextProgress);
   }
 
   async function answerGrammar(option: string) {
@@ -377,7 +415,7 @@ export function StudyDashboard() {
   async function nextGrammar() {
     await persistProgress({
       ...progress,
-      grammarIndex: (progress.grammarIndex + 1) % grammarDeck.length
+      grammarIndex: (progress.grammarIndex + 1) % studyPack.grammar.length
     });
     setGrammarFeedback("");
   }
@@ -557,7 +595,7 @@ export function StudyDashboard() {
             <p>
               ブラウザですぐ使える英語勉強アプリです。拓郎用・和美用の2ユーザーを切り替えて、それぞれ別のプロフィールで使えます。
             </p>
-            <div className="inline-message">
+          <div className="inline-message">
               {supabaseEnabled
                 ? bootstrapped
                   ? "Supabase 本番ログインが有効です。"
@@ -615,7 +653,7 @@ export function StudyDashboard() {
           </div>
         </div>
         <div className="header-actions">
-          <div className="mini-pill">単語 {progress.vocabularyIndex + 1}/{vocabularyDeck.length}</div>
+          <div className="mini-pill">単語 {progress.vocabularyIndex + 1}/{studyPack.vocabulary.length}</div>
           <div className="mini-pill">文法スコア {progress.grammarScore}</div>
           <button className="ghost-button" onClick={() => void handleLogout()} type="button">
             ログアウト
@@ -643,6 +681,7 @@ export function StudyDashboard() {
           <div className="panel big-card">
             <span className="section-label">Vocabulary</span>
             <h2>{currentWord.word}</h2>
+            <div className="inline-message">{packLoading ? "AIがあなた向けの単語を更新中..." : studyPack.focusSummary}</div>
             <div className="meaning-box">{currentWord.meaning}</div>
             <p className="support-copy">{currentWord.sample}</p>
             <div className="tip-box">
@@ -655,6 +694,9 @@ export function StudyDashboard() {
               </button>
               <button className="primary-button" onClick={() => void goToNextWord()} type="button">
                 次の単語
+              </button>
+              <button className="secondary-button" onClick={() => void loadPersonalizedPack(loggedInUser.name, progress)} type="button">
+                AIで更新
               </button>
             </div>
           </div>
@@ -770,7 +812,7 @@ export function StudyDashboard() {
             <div className="tip-box">
               <strong>そのまま使える例</strong>
               <div className="suggestion-list">
-                {coachSuggestions.map((suggestion) => (
+                {studyPack.conversationPrompts.map((suggestion) => (
                   <button className="suggestion-chip" key={suggestion} onClick={() => setManualMessage(suggestion)} type="button">
                     {suggestion}
                   </button>
