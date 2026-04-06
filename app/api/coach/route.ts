@@ -1,11 +1,13 @@
 import { NextResponse } from "next/server";
 
-const fallbackReply = `Nice try. I understood your message, and here is a more natural version:
+const fallbackReply = `Natural reply:
+I want to improve my everyday English before my working holiday.
 
-"I want to get better at everyday English before my working holiday."
+Japanese tip:
+最初は短くて大丈夫です。主語 + 動詞 + 目的だけでも十分伝わります。
 
-Try answering this next:
-What kind of job do you want to do when you arrive?`;
+Try this next:
+I want to work at a cafe and make new friends.`;
 
 export async function POST(request: Request) {
   const body = (await request.json()) as {
@@ -37,9 +39,21 @@ Your job:
 - Keep replies short and supportive.
 - Focus on natural everyday English.
 - Correct mistakes gently.
-- Give one corrected version, one short explanation in Japanese, and one follow-up question in English.
+- The user may be speaking through a microphone, so make replies easy to say out loud.
+- Give one natural reply, one short explanation in Japanese, and one "Try this next" line the learner can say next.
+- Avoid long paragraphs.
 - Tune the conversation toward this focus area: ${body.focusArea ?? "conversation"}.
 - Learner profile: ${body.learnerProfile ?? "Wants practical daily English for work, housing, and making friends."}
+
+Format exactly like this:
+Natural reply:
+...
+
+Japanese tip:
+...
+
+Try this next:
+...
 
 User message:
 ${message}

@@ -1,96 +1,232 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { gameLessons, starterPrompts, starterWeaknesses, starterWords } from "@/lib/mock-data";
-import { Challenge, ConversationMessage, GameLesson, Weakness } from "@/lib/types";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { coachSuggestions, defaultUsers, grammarDeck, speakingHints, starterWeaknesses, vocabularyDeck } from "@/lib/mock-data";
+import { AppUser, ConversationMessage, GrammarCard, UserProgress, Weakness } from "@/lib/types";
 
-type Mode = "path" | "sprint" | "coach";
+type Tab = "vocabulary" | "grammar" | "conversation" | "profile";
 
-const storageKey = "english-study-coach-game-state";
+type SpeechRecognitionInstance = {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  start: () => void;
+  stop: () => void;
+  onresult: ((event: SpeechRecognitionEventLike) => void) | null;
+  onend: (() => void) | null;
+  onerror: ((event: { error: string }) => void) | null;
+};
+
+type SpeechRecognitionEventLike = {
+  results: ArrayLike<ArrayLike<{ transcript: string }>>;
+};
+
+type WindowWithSpeech = Window & {
+  webkitSpeechRecognition?: new () => SpeechRecognitionInstance;
+  SpeechRecognition?: new () => SpeechRecognitionInstance;
+};
+
+const usersStorageKey = "english-quest-users";
+const activeUserStorageKey = "english-quest-active-user";
+
+function progressStorageKey(userId: string) {
+  return `english-quest-progress-${userId}`;
+}
+
+function defaultProgress(): UserProgress {
+  return {
+    vocabularyIndex: 0,
+    grammarIndex: 0,
+    grammarScore: 0,
+    conversationHistory: [
+      {
+        role: "ai",
+        text:
+          "Hi! Press the mic and answer in simple English. I will help you say it more naturally."
+      }
+    ]
+  };
+}
 
 export function StudyDashboard() {
-  const [mode, setMode] = useState<Mode>("path");
-  const [currentLessonIndex, setCurrentLessonIndex] = useState(0);
-  const [currentChallengeIndex, setCurrentChallengeIndex] = useState(0);
-  const [hearts, setHearts] = useState(5);
-  const [xp, setXp] = useState(120);
-  const [streak, setStreak] = useState(4);
-  const [selectedChoice, setSelectedChoice] = useState<string | null>(null);
-  const [typedOrder, setTypedOrder] = useState("");
-  const [feedback, setFeedback] = useState<{ kind: "correct" | "incorrect"; text: string } | null>(null);
-  const [completedLessons, setCompletedLessons] = useState<string[]>([]);
-  const [weaknesses] = useState<Weakness[]>(starterWeaknesses);
-  const [message, setMessage] = useState("");
-  const [conversation, setConversation] = useState<ConversationMessage[]>([
-    {
-      role: "ai",
-      text: "Hi! Let's keep it simple. Tell me one thing you want to do during your working holiday."
-    }
-  ]);
+  const [users, setUsers] = useState<AppUser[]>(defaultUsers);
+  const [selectedUserId, setSelectedUserId] = useState<AppUser["id"]>("takuro");
+  const [loggedInUserId, setLoggedInUserId] = useState<AppUser["id"] | null>(null);
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+  const [activeTab, setActiveTab] = useState<Tab>("vocabulary");
+  const [progress, setProgress] = useState<UserProgress>(defaultProgress());
+  const [grammarFeedback, setGrammarFeedback] = useState<string>("");
+  const [changePasswordForm, setChangePasswordForm] = useState({
+    current: "",
+    next: "",
+    confirm: ""
+  });
+  const [profileMessage, setProfileMessage] = useState("");
+  const [micSupported, setMicSupported] = useState(false);
+  const [listening, setListening] = useState(false);
   const [coachLoading, setCoachLoading] = useState(false);
+  const [manualMessage, setManualMessage] = useState("");
+  const [speechError, setSpeechError] = useState("");
+  const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
 
-  const currentLesson = gameLessons[currentLessonIndex];
-  const currentChallenge = currentLesson.challenges[currentChallengeIndex];
+  const weaknesses = starterWeaknesses;
+  const selectedUser = useMemo(
+    () => users.find((user) => user.id === selectedUserId) ?? users[0],
+    [selectedUserId, users]
+  );
+  const loggedInUser = useMemo(
+    () => users.find((user) => user.id === loggedInUserId) ?? null,
+    [loggedInUserId, users]
+  );
+
+  const currentWord = vocabularyDeck[progress.vocabularyIndex] ?? vocabularyDeck[0];
+  const currentGrammar = grammarDeck[progress.grammarIndex] ?? grammarDeck[0];
 
   useEffect(() => {
-    const saved = window.localStorage.getItem(storageKey);
+    const storedUsers = window.localStorage.getItem(usersStorageKey);
+    const storedActiveUser = window.localStorage.getItem(activeUserStorageKey) as AppUser["id"] | null;
+    const speechWindow = window as WindowWithSpeech;
+    const Recognition = speechWindow.SpeechRecognition ?? speechWindow.webkitSpeechRecognition;
 
-    if (!saved) {
-      return;
+    if (storedUsers) {
+      const parsed = JSON.parse(storedUsers) as AppUser[];
+      setUsers(parsed);
+    } else {
+      window.localStorage.setItem(usersStorageKey, JSON.stringify(defaultUsers));
     }
 
-    const parsed = JSON.parse(saved) as {
-      mode: Mode;
-      currentLessonIndex: number;
-      currentChallengeIndex: number;
-      hearts: number;
-      xp: number;
-      streak: number;
-      completedLessons: string[];
-      conversation: ConversationMessage[];
-    };
+    if (storedActiveUser) {
+      setLoggedInUserId(storedActiveUser);
+      setSelectedUserId(storedActiveUser);
+      loadProgress(storedActiveUser);
+    }
 
-    setMode(parsed.mode);
-    setCurrentLessonIndex(parsed.currentLessonIndex);
-    setCurrentChallengeIndex(parsed.currentChallengeIndex);
-    setHearts(parsed.hearts);
-    setXp(parsed.xp);
-    setStreak(parsed.streak);
-    setCompletedLessons(parsed.completedLessons);
-    setConversation(parsed.conversation);
+    if (Recognition) {
+      setMicSupported(true);
+      const recognition = new Recognition();
+      recognition.continuous = false;
+      recognition.interimResults = false;
+      recognition.lang = "en-US";
+      recognition.onresult = (event) => {
+        const transcript = event.results[0]?.[0]?.transcript?.trim();
+
+        if (transcript) {
+          void submitConversation(transcript);
+        }
+      };
+      recognition.onerror = (event) => {
+        setSpeechError(event.error === "not-allowed" ? "マイクの許可が必要です。" : "音声認識に失敗しました。");
+        setListening(false);
+      };
+      recognition.onend = () => {
+        setListening(false);
+      };
+      recognitionRef.current = recognition;
+    }
   }, []);
 
   useEffect(() => {
-    window.localStorage.setItem(
-      storageKey,
-      JSON.stringify({
-        mode,
-        currentLessonIndex,
-        currentChallengeIndex,
-        hearts,
-        xp,
-        streak,
-        completedLessons,
-        conversation
-      })
-    );
-  }, [completedLessons, conversation, currentChallengeIndex, currentLessonIndex, hearts, mode, streak, xp]);
+    window.localStorage.setItem(usersStorageKey, JSON.stringify(users));
+  }, [users]);
 
-  const progressPercent = useMemo(() => {
-    return ((currentChallengeIndex + 1) / currentLesson.challenges.length) * 100;
-  }, [currentChallengeIndex, currentLesson.challenges.length]);
+  useEffect(() => {
+    if (!loggedInUserId) {
+      return;
+    }
 
-  async function sendMessage(event: FormEvent<HTMLFormElement>) {
+    window.localStorage.setItem(activeUserStorageKey, loggedInUserId);
+    window.localStorage.setItem(progressStorageKey(loggedInUserId), JSON.stringify(progress));
+  }, [loggedInUserId, progress]);
+
+  function loadProgress(userId: AppUser["id"]) {
+    const saved = window.localStorage.getItem(progressStorageKey(userId));
+
+    if (!saved) {
+      setProgress(defaultProgress());
+      return;
+    }
+
+    setProgress(JSON.parse(saved) as UserProgress);
+  }
+
+  function handleLogin(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const trimmedMessage = message.trim();
 
-    if (!trimmedMessage) {
+    if (selectedUser.password !== loginPassword) {
+      setLoginError("パスワードが違います。");
+      return;
+    }
+
+    setLoggedInUserId(selectedUser.id);
+    setLoginPassword("");
+    setLoginError("");
+    setProfileMessage("");
+    loadProgress(selectedUser.id);
+  }
+
+  function handleLogout() {
+    setLoggedInUserId(null);
+    window.localStorage.removeItem(activeUserStorageKey);
+  }
+
+  function goToNextWord() {
+    setProgress((current) => ({
+      ...current,
+      vocabularyIndex: (current.vocabularyIndex + 1) % vocabularyDeck.length
+    }));
+  }
+
+  function goToPrevWord() {
+    setProgress((current) => ({
+      ...current,
+      vocabularyIndex:
+        current.vocabularyIndex === 0 ? vocabularyDeck.length - 1 : current.vocabularyIndex - 1
+    }));
+  }
+
+  function answerGrammar(option: string, card: GrammarCard) {
+    const correct = option === card.answer;
+    setProgress((current) => ({
+      ...current,
+      grammarScore: correct ? current.grammarScore + 1 : current.grammarScore
+    }));
+    setGrammarFeedback(
+      correct
+        ? `正解です。${card.explanation}`
+        : `今回はこっちが自然です: "${card.answer}"。${card.explanation}`
+    );
+  }
+
+  function nextGrammar() {
+    setProgress((current) => ({
+      ...current,
+      grammarIndex: (current.grammarIndex + 1) % grammarDeck.length
+    }));
+    setGrammarFeedback("");
+  }
+
+  function startListening() {
+    if (!recognitionRef.current) {
+      setSpeechError("このブラウザではマイク会話が使えません。");
+      return;
+    }
+
+    setSpeechError("");
+    setListening(true);
+    recognitionRef.current.start();
+  }
+
+  async function submitConversation(text: string) {
+    if (!loggedInUser) {
       return;
     }
 
     setCoachLoading(true);
-    setConversation((current) => [...current, { role: "user", text: trimmedMessage }]);
-    setMessage("");
+    setProgress((current) => ({
+      ...current,
+      conversationHistory: [...current.conversationHistory, { role: "user", text }]
+    }));
 
     try {
       const response = await fetch("/api/coach", {
@@ -99,414 +235,403 @@ export function StudyDashboard() {
           "Content-Type": "application/json"
         },
         body: JSON.stringify({
-          message: trimmedMessage,
+          message: text,
           focusArea: "conversation",
-          learnerProfile:
-            "Japanese learner preparing for a working holiday next year. Wants practical daily conversation with easy explanations."
+          learnerProfile: `${loggedInUser.name} is practicing spoken English for a working holiday. Keep advice easy and practical.`
         })
       });
 
       const data = (await response.json()) as { reply: string };
-      setConversation((current) => [...current, { role: "ai", text: data.reply }]);
+      setProgress((current) => ({
+        ...current,
+        conversationHistory: [...current.conversationHistory, { role: "ai", text: data.reply }]
+      }));
+      speakText(data.reply);
     } finally {
       setCoachLoading(false);
     }
   }
 
-  function startLesson(index: number) {
-    setMode("sprint");
-    setCurrentLessonIndex(index);
-    setCurrentChallengeIndex(0);
-    setSelectedChoice(null);
-    setTypedOrder("");
-    setFeedback(null);
-  }
-
-  function checkAnswer(challenge: Challenge) {
-    const isCorrect =
-      challenge.type === "order"
-        ? normalizeAnswer(typedOrder) === normalizeAnswer(challenge.answer.join(" "))
-        : selectedChoice !== null && challenge.answer.includes(selectedChoice);
-
-    if (isCorrect) {
-      setFeedback({ kind: "correct", text: challenge.explanation });
-      setXp((current) => current + challenge.xp);
+  function speakText(text: string) {
+    if (!("speechSynthesis" in window)) {
       return;
     }
 
-    setHearts((current) => Math.max(0, current - 1));
-    setFeedback({
-      kind: "incorrect",
-      text:
-        challenge.type === "order"
-          ? `正解は "${challenge.answer.join(" ")}" です。${challenge.explanation}`
-          : `正解を見ながらでも大丈夫。${challenge.explanation}`
-    });
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.lang = "en-US";
+    window.speechSynthesis.cancel();
+    window.speechSynthesis.speak(utterance);
   }
 
-  function nextChallenge() {
-    if (currentChallengeIndex < currentLesson.challenges.length - 1) {
-      setCurrentChallengeIndex((current) => current + 1);
-      resetChallengeUi();
+  async function handleManualSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    const text = manualMessage.trim();
+
+    if (!text) {
       return;
     }
 
-    if (!completedLessons.includes(currentLesson.id)) {
-      setCompletedLessons((current) => [...current, currentLesson.id]);
-      setXp((current) => current + currentLesson.rewardXp);
-      setStreak((current) => current + 1);
-    }
-
-    setMode("path");
-    resetChallengeUi();
+    setManualMessage("");
+    await submitConversation(text);
   }
 
-  function resetChallengeUi() {
-    setSelectedChoice(null);
-    setTypedOrder("");
-    setFeedback(null);
+  function handleAvatarChange(event: ChangeEvent<HTMLInputElement>) {
+    const file = event.target.files?.[0];
+
+    if (!file || !loggedInUser) {
+      return;
+    }
+
+    const reader = new FileReader();
+    reader.onload = () => {
+      const avatar = typeof reader.result === "string" ? reader.result : "";
+      setUsers((current) =>
+        current.map((user) => (user.id === loggedInUser.id ? { ...user, avatar } : user))
+      );
+      setProfileMessage("プロフィール画像を更新しました。");
+    };
+    reader.readAsDataURL(file);
+  }
+
+  function handlePasswordChange(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+
+    if (!loggedInUser) {
+      return;
+    }
+
+    if (changePasswordForm.current !== loggedInUser.password) {
+      setProfileMessage("現在のパスワードが違います。");
+      return;
+    }
+
+    if (changePasswordForm.next.length < 4) {
+      setProfileMessage("新しいパスワードは4文字以上にしてください。");
+      return;
+    }
+
+    if (changePasswordForm.next !== changePasswordForm.confirm) {
+      setProfileMessage("新しいパスワードの確認が一致しません。");
+      return;
+    }
+
+    setUsers((current) =>
+      current.map((user) =>
+        user.id === loggedInUser.id ? { ...user, password: changePasswordForm.next } : user
+      )
+    );
+    setChangePasswordForm({ current: "", next: "", confirm: "" });
+    setProfileMessage("パスワードを変更しました。");
+  }
+
+  if (!loggedInUser) {
+    return (
+      <main className="simple-shell">
+        <section className="login-panel">
+          <div className="login-copy">
+            <span className="simple-badge">English Partner</span>
+            <h1>単語・文法・英会話を、2人それぞれで学べる。</h1>
+            <p>
+              ブラウザですぐ使える英語勉強アプリです。拓郎用・和美用の2ユーザーを切り替えて、それぞれ別のプロフィールで使えます。
+            </p>
+          </div>
+
+          <div className="panel stack">
+            <h2>ユーザーを選ぶ</h2>
+            <div className="user-grid">
+              {users.map((user) => (
+                <button
+                  className={selectedUserId === user.id ? "user-card active" : "user-card"}
+                  key={user.id}
+                  onClick={() => setSelectedUserId(user.id)}
+                  type="button"
+                >
+                  <Avatar user={user} />
+                  <strong>{user.name}</strong>
+                </button>
+              ))}
+            </div>
+
+            <form className="stack" onSubmit={handleLogin}>
+              <label className="field">
+                <span>パスワード</span>
+                <input
+                  className="text-input"
+                  placeholder="パスワードを入力"
+                  type="password"
+                  value={loginPassword}
+                  onChange={(event) => setLoginPassword(event.target.value)}
+                />
+              </label>
+              {loginError ? <div className="inline-message error">{loginError}</div> : null}
+              <button className="primary-button" type="submit">
+                {selectedUser?.name}としてログイン
+              </button>
+            </form>
+          </div>
+        </section>
+      </main>
+    );
   }
 
   return (
-    <main className="game-shell">
-      <section className="topbar">
-        <div>
-          <span className="brand-badge">English Quest</span>
-          <h1>ゲーム感覚で、日常英会話を身につける。</h1>
-          <p>
-            ブラウザで開いたらすぐ始められる、ワーホリ向け英語トレーニングです。単語、文法、リスニング、会話を
-            1問ずつ直感的に進めます。
-          </p>
-        </div>
-
-        <div className="scoreboard">
-          <div className="score-pill">
-            <span>Streak</span>
-            <strong>{streak} days</strong>
-          </div>
-          <div className="score-pill">
-            <span>XP</span>
-            <strong>{xp}</strong>
-          </div>
-          <div className="score-pill heart">
-            <span>Hearts</span>
-            <strong>{hearts}/5</strong>
+    <main className="simple-shell">
+      <header className="app-header">
+        <div className="header-user">
+          <Avatar user={loggedInUser} />
+          <div>
+            <span className="simple-badge">Logged in</span>
+            <h1>{loggedInUser.name}さんの英語ルーム</h1>
           </div>
         </div>
-      </section>
+        <div className="header-actions">
+          <div className="mini-pill">単語 {progress.vocabularyIndex + 1}/{vocabularyDeck.length}</div>
+          <div className="mini-pill">文法スコア {progress.grammarScore}</div>
+          <button className="ghost-button" onClick={handleLogout} type="button">
+            ログアウト
+          </button>
+        </div>
+      </header>
 
-      <nav className="mode-tabs" aria-label="study modes">
-        <button className={mode === "path" ? "tab active" : "tab"} onClick={() => setMode("path")} type="button">
-          学習ルート
+      <nav className="simple-tabs">
+        <button className={activeTab === "vocabulary" ? "tab active" : "tab"} onClick={() => setActiveTab("vocabulary")} type="button">
+          単語
         </button>
-        <button className={mode === "sprint" ? "tab active" : "tab"} onClick={() => setMode("sprint")} type="button">
-          今のレッスン
+        <button className={activeTab === "grammar" ? "tab active" : "tab"} onClick={() => setActiveTab("grammar")} type="button">
+          文法
         </button>
-        <button className={mode === "coach" ? "tab active" : "tab"} onClick={() => setMode("coach")} type="button">
-          AIコーチ
+        <button className={activeTab === "conversation" ? "tab active" : "tab"} onClick={() => setActiveTab("conversation")} type="button">
+          英会話
+        </button>
+        <button className={activeTab === "profile" ? "tab active" : "tab"} onClick={() => setActiveTab("profile")} type="button">
+          プロフィール
         </button>
       </nav>
 
-      {mode === "path" ? (
-        <section className="route-layout">
-          <div className="panel hero-panel">
-            <div className="section-head">
-              <div>
-                <span className="tiny-label">Today&apos;s Mission</span>
-                <h2>{areaName(weaknesses[0].area)}を優先して進めよう</h2>
-              </div>
-              <button className="primary-button" onClick={() => startLesson(currentLessonIndex)} type="button">
-                今すぐスタート
+      {activeTab === "vocabulary" ? (
+        <section className="content-grid">
+          <div className="panel big-card">
+            <span className="section-label">Vocabulary</span>
+            <h2>{currentWord.word}</h2>
+            <div className="meaning-box">{currentWord.meaning}</div>
+            <p className="support-copy">{currentWord.sample}</p>
+            <div className="tip-box">
+              <strong>覚え方のコツ</strong>
+              <p>{currentWord.tip}</p>
+            </div>
+            <div className="button-row">
+              <button className="ghost-button" onClick={goToPrevWord} type="button">
+                前の単語
+              </button>
+              <button className="primary-button" onClick={goToNextWord} type="button">
+                次の単語
               </button>
             </div>
-            <div className="mission-strip">
-              <div className="mission-card strong">
-                <span className="mission-kicker">最優先</span>
-                <strong>{weaknesses[0].reason}</strong>
-                <p>{weaknesses[0].nextAction}</p>
-              </div>
-              <div className="mission-card">
-                <span className="mission-kicker">今日の単語</span>
-                <strong>{starterWords[0].word}</strong>
-                <p>{starterWords[0].meaning}</p>
-              </div>
-              <div className="mission-card">
-                <span className="mission-kicker">会話テーマ</span>
-                <strong>{starterPrompts[0]}</strong>
-                <p>まずは短い1文で返せればOKです。</p>
-              </div>
+          </div>
+
+          <aside className="panel">
+            <span className="section-label">Today&apos;s Focus</span>
+            <div className="weak-list">
+              {weaknesses.map((weakness: Weakness) => (
+                <div className="weak-card" key={weakness.area}>
+                  <strong>{labelForArea(weakness.area)}</strong>
+                  <p>{weakness.nextAction}</p>
+                </div>
+              ))}
             </div>
-          </div>
-
-          <div className="lesson-map">
-            {gameLessons.map((lesson, index) => {
-              const completed = completedLessons.includes(lesson.id);
-              const active = index === currentLessonIndex;
-
-              return (
-                <article className={active ? "lesson-node active" : "lesson-node"} key={lesson.id}>
-                  <div className="node-index">{lesson.emoji}</div>
-                  <div className="node-body">
-                    <div className="node-topline">
-                      <span className="node-area">{areaName(lesson.area)}</span>
-                      <span className={completed ? "node-status clear" : "node-status"}>
-                        {completed ? "Clear" : `+${lesson.rewardXp} XP`}
-                      </span>
-                    </div>
-                    <h3>{lesson.title}</h3>
-                    <p>{lesson.summary}</p>
-                    <div className="button-row">
-                      <button className="secondary-button" onClick={() => startLesson(index)} type="button">
-                        レッスン開始
-                      </button>
-                    </div>
-                  </div>
-                </article>
-              );
-            })}
-          </div>
-
-          <div className="side-stack">
-            <aside className="panel">
-              <div className="section-head compact">
-                <div>
-                  <span className="tiny-label">Weak Points</span>
-                  <h2>あなたの苦手</h2>
-                </div>
-              </div>
-              <div className="weak-list">
-                {weaknesses.map((weakness) => (
-                  <div className="weak-card" key={weakness.area}>
-                    <div className="weak-line">
-                      <strong>{areaName(weakness.area)}</strong>
-                      <span>{weakness.score}</span>
-                    </div>
-                    <div className="meter">
-                      <div className="meter-fill" style={{ width: `${weakness.score}%` }} />
-                    </div>
-                    <p>{weakness.reason}</p>
-                  </div>
-                ))}
-              </div>
-            </aside>
-
-            <aside className="panel">
-              <div className="section-head compact">
-                <div>
-                  <span className="tiny-label">Word Boost</span>
-                  <h2>すぐ使える単語</h2>
-                </div>
-              </div>
-              <div className="word-stack">
-                {starterWords.map((word) => (
-                  <div className="word-tile" key={word.word}>
-                    <strong>{word.word}</strong>
-                    <span>{word.meaning}</span>
-                    <p>{word.example}</p>
-                  </div>
-                ))}
-              </div>
-            </aside>
-          </div>
+          </aside>
         </section>
       ) : null}
 
-      {mode === "sprint" ? (
-        <section className="challenge-layout">
-          <div className="challenge-main panel">
-            <div className="challenge-head">
-              <div>
-                <span className="tiny-label">{currentLesson.title}</span>
-                <h2>{currentChallenge.prompt}</h2>
-                <p>{currentChallenge.support}</p>
+      {activeTab === "grammar" ? (
+        <section className="content-grid">
+          <div className="panel big-card">
+            <span className="section-label">Grammar</span>
+            <h2>{currentGrammar.title}</h2>
+            <div className="pattern-box">{currentGrammar.pattern}</div>
+            <p className="support-copy">{currentGrammar.explanation}</p>
+            <div className="example-stack">
+              <div className="example-card good">
+                <strong>自然な言い方</strong>
+                <p>{currentGrammar.goodExample}</p>
               </div>
-              <div className="xp-badge">+{currentChallenge.xp} XP</div>
-            </div>
-
-            <div className="progress-bar">
-              <div className="progress-fill" style={{ width: `${progressPercent}%` }} />
-            </div>
-
-            {currentChallenge.type === "order" ? (
-              <div className="order-zone">
-                <div className="token-row">
-                  {currentChallenge.choices.map((choice) => (
-                    <button
-                      className="token"
-                      key={choice.id}
-                      onClick={() =>
-                        setTypedOrder((current) =>
-                          current ? `${current} ${choice.text}` : choice.text
-                        )
-                      }
-                      type="button"
-                    >
-                      {choice.text}
-                    </button>
-                  ))}
-                </div>
-                <textarea
-                  className="answer-box"
-                  placeholder="タップして並べるか、自分で入力してもOK"
-                  value={typedOrder}
-                  onChange={(event) => setTypedOrder(event.target.value)}
-                />
+              <div className="example-card bad">
+                <strong>崩れやすい言い方</strong>
+                <p>{currentGrammar.commonMistake}</p>
               </div>
-            ) : (
-              <div className="choice-grid">
-                {currentChallenge.choices.map((choice) => {
-                  const active = selectedChoice === choice.id;
-
-                  return (
-                    <button
-                      className={active ? "choice-card active" : "choice-card"}
-                      key={choice.id}
-                      onClick={() => setSelectedChoice(choice.id)}
-                      type="button"
-                    >
-                      <span className="choice-letter">{choice.id.toUpperCase()}</span>
-                      <span>{choice.text}</span>
-                    </button>
-                  );
-                })}
-              </div>
-            )}
-
-            {feedback ? (
-              <div className={feedback.kind === "correct" ? "feedback success" : "feedback error"}>
-                <strong>{feedback.kind === "correct" ? "Good!" : "惜しい!"}</strong>
-                <p>{feedback.text}</p>
-              </div>
-            ) : (
-              <div className="coach-note">
-                正解しても間違えても大丈夫です。1問ずつ感覚で進めていく設計にしています。
-              </div>
-            )}
-
-            <div className="button-row">
-              <button className="primary-button" onClick={() => checkAnswer(currentChallenge)} type="button">
-                答え合わせ
-              </button>
-              <button className="secondary-button" onClick={nextChallenge} type="button">
-                次へ
-              </button>
-              <button className="ghost-button" onClick={() => setMode("path")} type="button">
-                ルートに戻る
-              </button>
             </div>
           </div>
 
-          <aside className="challenge-side">
-            <div className="panel">
-              <div className="section-head compact">
-                <div>
-                  <span className="tiny-label">Quick Tips</span>
-                  <h2>わかりやすい説明</h2>
-                </div>
+          <aside className="panel stack">
+            <span className="section-label">Quick Quiz</span>
+            <h3>{currentGrammar.quizPrompt}</h3>
+            <div className="option-list">
+              {currentGrammar.quizOptions.map((option) => (
+                <button
+                  className="option-button"
+                  key={option}
+                  onClick={() => answerGrammar(option, currentGrammar)}
+                  type="button"
+                >
+                  {option}
+                </button>
+              ))}
+            </div>
+            {grammarFeedback ? <div className="inline-message">{grammarFeedback}</div> : null}
+            <button className="secondary-button" onClick={nextGrammar} type="button">
+              次の文法へ
+            </button>
+          </aside>
+        </section>
+      ) : null}
+
+      {activeTab === "conversation" ? (
+        <section className="content-grid conversation-grid">
+          <div className="panel big-card">
+            <span className="section-label">Speaking</span>
+            <h2>マイクで話しかける英会話</h2>
+            <p className="support-copy">
+              ボタンを押して英語で話すと、AIが自然な言い方と次に言うといい表現を返します。
+            </p>
+
+            <div className="mic-area">
+              <button className={listening ? "mic-button live" : "mic-button"} onClick={startListening} type="button">
+                {listening ? "Listening..." : "マイクを起動"}
+              </button>
+              <div className="mic-note">
+                {micSupported ? "英語でそのまま話してください。" : "このブラウザでは音声入力が使えません。"}
               </div>
-              <div className="tip-card">
-                <strong>{areaName(currentChallenge.area)}のコツ</strong>
-                <p>{currentChallenge.explanation}</p>
-              </div>
-              <div className="tip-card">
-                <strong>Duolingoっぽく進めるコツ</strong>
-                <p>完璧よりテンポ重視。迷ったら選ぶ、間違えたらすぐ覚える、で前に進むのがコツです。</p>
-              </div>
+              {coachLoading ? <div className="inline-message">AIが返答を作っています...</div> : null}
+              {speechError ? <div className="inline-message error">{speechError}</div> : null}
             </div>
 
-            <div className="panel">
-              <div className="section-head compact">
-                <div>
-                  <span className="tiny-label">Progress</span>
-                  <h2>このレッスンの進み具合</h2>
+            <div className="chat-column">
+              {progress.conversationHistory.map((item, index) => (
+                <div className={item.role === "ai" ? "chat-item ai" : "chat-item user"} key={`${item.role}-${index}`}>
+                  <span>{item.role === "ai" ? "AI Coach" : loggedInUser.name}</span>
+                  <p>{item.text}</p>
                 </div>
-              </div>
-              <div className="mini-stats">
-                <div className="mini-stat">
-                  <span>問題</span>
-                  <strong>
-                    {currentChallengeIndex + 1}/{currentLesson.challenges.length}
-                  </strong>
-                </div>
-                <div className="mini-stat">
-                  <span>報酬</span>
-                  <strong>{currentLesson.rewardXp} XP</strong>
-                </div>
-                <div className="mini-stat">
-                  <span>残りハート</span>
-                  <strong>{hearts}</strong>
-                </div>
+              ))}
+            </div>
+
+            <form className="manual-form" onSubmit={handleManualSubmit}>
+              <input
+                className="text-input"
+                placeholder="マイクが難しいときだけここに入力"
+                value={manualMessage}
+                onChange={(event) => setManualMessage(event.target.value)}
+              />
+              <button className="ghost-button" type="submit">
+                テキストで送る
+              </button>
+            </form>
+          </div>
+
+          <aside className="panel stack">
+            <span className="section-label">話す補助</span>
+            <div className="tip-box">
+              <strong>こう話すと楽です</strong>
+              <ul className="flat-list">
+                {speakingHints.map((hint) => (
+                  <li key={hint}>{hint}</li>
+                ))}
+              </ul>
+            </div>
+            <div className="tip-box">
+              <strong>そのまま使える例</strong>
+              <div className="suggestion-list">
+                {coachSuggestions.map((suggestion) => (
+                  <button className="suggestion-chip" key={suggestion} onClick={() => setManualMessage(suggestion)} type="button">
+                    {suggestion}
+                  </button>
+                ))}
               </div>
             </div>
           </aside>
         </section>
       ) : null}
 
-      {mode === "coach" ? (
-        <section className="coach-layout">
-          <div className="panel">
-            <div className="section-head">
-              <div>
-                <span className="tiny-label">AI Coach</span>
-                <h2>短文で英会話練習</h2>
+      {activeTab === "profile" ? (
+        <section className="content-grid">
+          <div className="panel big-card">
+            <span className="section-label">Profile</span>
+            <h2>{loggedInUser.name}さんの設定</h2>
+            <div className="profile-block">
+              <Avatar large user={loggedInUser} />
+              <div className="stack">
+                <label className="field">
+                  <span>プロフィール画像</span>
+                  <input accept="image/*" className="text-input" type="file" onChange={handleAvatarChange} />
+                </label>
               </div>
-            </div>
-            <div className="prompt-pills">
-              {starterPrompts.map((prompt) => (
-                <button className="prompt-pill" key={prompt} onClick={() => setMessage(prompt)} type="button">
-                  {prompt}
-                </button>
-              ))}
-            </div>
-            <div className="chat-feed">
-              {conversation.map((item, index) => (
-                <div className={item.role === "ai" ? "bubble ai" : "bubble user"} key={`${item.role}-${index}`}>
-                  <span>{item.role === "ai" ? "Coach" : "You"}</span>
-                  <p>{item.text}</p>
-                </div>
-              ))}
             </div>
           </div>
 
-          <div className="panel">
-            <div className="section-head compact">
-              <div>
-                <span className="tiny-label">Speak</span>
-                <h2>1文で送る</h2>
-              </div>
-            </div>
-            <form className="coach-form" onSubmit={sendMessage}>
-              <textarea
-                className="answer-box"
-                placeholder="例: I want to work at a cafe and make new friends."
-                value={message}
-                onChange={(event) => setMessage(event.target.value)}
-              />
-              <div className="button-row">
-                <button className="primary-button" disabled={coachLoading} type="submit">
-                  {coachLoading ? "返信中..." : "AIに送る"}
-                </button>
-              </div>
+          <aside className="panel stack">
+            <span className="section-label">Security</span>
+            <form className="stack" onSubmit={handlePasswordChange}>
+              <label className="field">
+                <span>現在のパスワード</span>
+                <input
+                  className="text-input"
+                  type="password"
+                  value={changePasswordForm.current}
+                  onChange={(event) =>
+                    setChangePasswordForm((current) => ({ ...current, current: event.target.value }))
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>新しいパスワード</span>
+                <input
+                  className="text-input"
+                  type="password"
+                  value={changePasswordForm.next}
+                  onChange={(event) =>
+                    setChangePasswordForm((current) => ({ ...current, next: event.target.value }))
+                  }
+                />
+              </label>
+              <label className="field">
+                <span>新しいパスワード確認</span>
+                <input
+                  className="text-input"
+                  type="password"
+                  value={changePasswordForm.confirm}
+                  onChange={(event) =>
+                    setChangePasswordForm((current) => ({ ...current, confirm: event.target.value }))
+                  }
+                />
+              </label>
+              <button className="primary-button" type="submit">
+                パスワードを変更
+              </button>
             </form>
-          </div>
+            {profileMessage ? <div className="inline-message">{profileMessage}</div> : null}
+          </aside>
         </section>
       ) : null}
     </main>
   );
 }
 
-function normalizeAnswer(value: string) {
-  return value.replace(/\s+/g, " ").trim().toLowerCase();
+function Avatar({ user, large = false }: { user: AppUser; large?: boolean }) {
+  return user.avatar ? (
+    <img alt={`${user.name} avatar`} className={large ? "avatar large" : "avatar"} src={user.avatar} />
+  ) : (
+    <div className={large ? "avatar fallback large" : "avatar fallback"}>{user.name.slice(0, 1)}</div>
+  );
 }
 
-function areaName(area: GameLesson["area"] | Weakness["area"]) {
+function labelForArea(area: Weakness["area"]) {
   switch (area) {
     case "conversation":
       return "英会話";
-    case "vocabulary":
-      return "単語";
     case "grammar":
       return "文法";
+    case "vocabulary":
+      return "単語";
     case "listening":
       return "リスニング";
     default:

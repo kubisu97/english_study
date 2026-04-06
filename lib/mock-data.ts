@@ -1,227 +1,124 @@
-import { GameLesson, Weakness, WordCard } from "@/lib/types";
+import { AppUser, GrammarCard, VocabularyCard, Weakness } from "@/lib/types";
+
+export const defaultUsers: AppUser[] = [
+  {
+    id: "takuro",
+    name: "拓郎",
+    password: "takuro123"
+  },
+  {
+    id: "kazumi",
+    name: "和美",
+    password: "kazumi123"
+  }
+];
 
 export const starterWeaknesses: Weakness[] = [
   {
     area: "conversation",
     score: 76,
-    reason: "言いたいことは浮かぶけど、最初の一文がすぐ出ない。",
-    nextAction: "短い自己紹介と質問返しをテンポよく練習する。"
+    reason: "言いたい内容はあるのに、最初の一言が止まりやすい。",
+    nextAction: "短く返す練習を最優先で増やす。"
   },
   {
     area: "grammar",
-    score: 68,
-    reason: "時制と語順は通じるが、冠詞と前置詞で止まりやすい。",
-    nextAction: "会話でよく使う短文を並び替えで定着させる。"
+    score: 63,
+    reason: "時制と語順は伝わるが、自然さで崩れやすい。",
+    nextAction: "よく使う型を丸ごと覚える。"
   },
   {
     area: "vocabulary",
-    score: 57,
-    reason: "仕事・家探し・友達作りの単語がまだ少ない。",
-    nextAction: "場面ごとの頻出単語を音とセットで覚える。"
+    score: 58,
+    reason: "仕事と生活に直結する語彙がまだ足りない。",
+    nextAction: "単語を例文ごと音で覚える。"
   }
 ];
 
-export const starterWords: WordCard[] = [
+export const vocabularyDeck: VocabularyCard[] = [
   {
+    id: "shift",
     word: "shift",
     meaning: "シフト、勤務時間帯",
-    example: "Can I swap my shift on Friday?",
-    nuance: "ワーホリでアルバイトをするとかなり高頻度で出る。"
+    sample: "Can I swap my shift on Friday?",
+    tip: "仕事の会話でかなりよく出ます。`work` より具体的です。"
   },
   {
+    id: "bond",
     word: "bond",
     meaning: "保証金、敷金",
-    example: "Do I need to pay the bond before moving in?",
-    nuance: "部屋探しでよく出る実用単語。"
+    sample: "How much is the bond for this room?",
+    tip: "部屋探しでよく出るので、`rent` とセットで覚えると強いです。"
   },
   {
+    id: "hang-out",
     word: "hang out",
-    meaning: "遊ぶ、一緒に過ごす",
-    example: "Do you want to hang out after work?",
-    nuance: "友達作りで自然に使いやすい。"
+    meaning: "一緒に過ごす、遊ぶ",
+    sample: "Do you want to hang out after work?",
+    tip: "友達作りで自然に使えるカジュアル表現です。"
+  },
+  {
+    id: "available",
+    word: "available",
+    meaning: "空いている、対応できる",
+    sample: "I’m available on weekends.",
+    tip: "仕事・予定・部屋の空き確認まで幅広く使えます。"
   }
 ];
 
-export const starterPrompts = [
-  "カフェで初出勤の日に自己紹介する",
-  "シェアハウスで洗濯ルールを確認する",
-  "休みの日に友達を遊びへ誘う"
+export const grammarDeck: GrammarCard[] = [
+  {
+    id: "intro",
+    title: "自己紹介の基本形",
+    pattern: "I’m ... / I’m from ... / I work as ...",
+    explanation: "自己紹介は短い文を3つ並べるだけで十分自然に聞こえます。",
+    goodExample: "Hi, I’m Takuro. I’m from Japan, and I’m looking for cafe work.",
+    commonMistake: "I from Japan. I want work cafe.",
+    quizPrompt: "より自然なのはどっち？",
+    quizOptions: [
+      "I’m from Japan and I’m looking for cafe work.",
+      "I from Japan and I want work cafe."
+    ],
+    answer: "I’m from Japan and I’m looking for cafe work."
+  },
+  {
+    id: "request",
+    title: "お願いするときの型",
+    pattern: "Can I ... ? / Could I ... ?",
+    explanation: "生活や仕事のお願いは `Can I ... ?` だけでかなり戦えます。",
+    goodExample: "Can I use the washing machine now?",
+    commonMistake: "I use washing machine now okay?",
+    quizPrompt: "洗濯機を使っていいか自然に聞くなら？",
+    quizOptions: [
+      "Can I use the washing machine now?",
+      "I use washing machine now okay?"
+    ],
+    answer: "Can I use the washing machine now?"
+  },
+  {
+    id: "invite",
+    title: "友達を誘うときの型",
+    pattern: "Do you want to ... ? / Maybe we can ...",
+    explanation: "軽く誘いたいときは `Maybe we can ...` がちょうどいいです。",
+    goodExample: "Maybe we can grab dinner after work.",
+    commonMistake: "Please go dinner with me now.",
+    quizPrompt: "仕事終わりにご飯へ誘うなら？",
+    quizOptions: [
+      "Maybe we can grab dinner after work.",
+      "Please go dinner with me now."
+    ],
+    answer: "Maybe we can grab dinner after work."
+  }
 ];
 
-export const gameLessons: GameLesson[] = [
-  {
-    id: "lesson-intro",
-    title: "はじめての自己紹介",
-    emoji: "1",
-    area: "conversation",
-    summary: "ワーホリ初日に自然な自己紹介を言えるようになる。",
-    rewardXp: 30,
-    difficulty: "easy",
-    challenges: [
-      {
-        id: "intro-choice",
-        type: "choice",
-        area: "conversation",
-        prompt: "職場での最初の一言として、一番自然なのはどれ？",
-        support: "場面: 新しいカフェのスタッフルームに入った瞬間",
-        explanation: "あいさつ + 名前 + はじめまして の流れがいちばん自然です。",
-        xp: 10,
-        choices: [
-          { id: "a", text: "Hello, I am want work today.", hint: "文法が少し不自然。" },
-          { id: "b", text: "Hi, I’m Yuki. Nice to meet you all!", correct: true },
-          { id: "c", text: "My hobby is music and coffee.", hint: "いきなり趣味は少し飛びます。" }
-        ],
-        answer: ["b"]
-      },
-      {
-        id: "intro-order",
-        type: "order",
-        area: "grammar",
-        prompt: "単語を自然な順番に並べよう",
-        support: "I / from / am / Japan / originally",
-        explanation: "`I’m originally from Japan.` の語順で覚えると自己紹介でそのまま使えます。",
-        xp: 10,
-        choices: [
-          { id: "i", text: "I’m" },
-          { id: "originally", text: "originally" },
-          { id: "from", text: "from" },
-          { id: "japan", text: "Japan" }
-        ],
-        answer: ["I’m", "originally", "from", "Japan"]
-      },
-      {
-        id: "intro-listen",
-        type: "listen",
-        area: "listening",
-        prompt: "相手にこう聞かれたら、意味はどれ？",
-        support: "What kind of work are you hoping to do here?",
-        explanation: "`What kind of work` は『どんな仕事』をやりたいかを聞く定番表現です。",
-        xp: 10,
-        choices: [
-          { id: "a", text: "ここでどんな仕事をしたいの？", correct: true },
-          { id: "b", text: "今日は何時まで働くの？" },
-          { id: "c", text: "前の仕事は何だったの？" }
-        ],
-        answer: ["a"]
-      }
-    ]
-  },
-  {
-    id: "lesson-house",
-    title: "シェアハウス会話",
-    emoji: "2",
-    area: "vocabulary",
-    summary: "生活ルールを確認するための単語と質問を覚える。",
-    rewardXp: 35,
-    difficulty: "medium",
-    challenges: [
-      {
-        id: "house-choice",
-        type: "choice",
-        area: "vocabulary",
-        prompt: "洗濯ルールを聞くときに自然なのはどれ？",
-        support: "場面: シェアハウス初日",
-        explanation: "`How does ... work here?` はルールを聞くのに便利です。",
-        xp: 12,
-        choices: [
-          { id: "a", text: "How does laundry work here?", correct: true },
-          { id: "b", text: "Where laundry is rule?" },
-          { id: "c", text: "I laundry tonight okay?" }
-        ],
-        answer: ["a"]
-      },
-      {
-        id: "house-order",
-        type: "order",
-        area: "grammar",
-        prompt: "自然な質問に並べよう",
-        support: "use / Can / machine / washing / I / the / now ?",
-        explanation: "`Can I use the washing machine now?` はそのまま実戦で使えます。",
-        xp: 11,
-        choices: [
-          { id: "can", text: "Can" },
-          { id: "i", text: "I" },
-          { id: "use", text: "use" },
-          { id: "the", text: "the" },
-          { id: "washing", text: "washing" },
-          { id: "machine", text: "machine" },
-          { id: "now", text: "now?" }
-        ],
-        answer: ["Can", "I", "use", "the", "washing", "machine", "now?"]
-      },
-      {
-        id: "house-listen",
-        type: "listen",
-        area: "listening",
-        prompt: "この返答の意味として一番近いものを選ぼう",
-        support: "Yeah, just avoid using it after ten.",
-        explanation: "`avoid using it after ten` は『10時以降は使わないで』という意味です。",
-        xp: 12,
-        choices: [
-          { id: "a", text: "10時までは絶対使えないよ" },
-          { id: "b", text: "うん、ただ10時以降は使わないでね", correct: true },
-          { id: "c", text: "10分だけなら使っていいよ" }
-        ],
-        answer: ["b"]
-      }
-    ]
-  },
-  {
-    id: "lesson-friends",
-    title: "友達を誘う英語",
-    emoji: "3",
-    area: "conversation",
-    summary: "堅すぎず軽すぎない、自然な誘い方を身につける。",
-    rewardXp: 40,
-    difficulty: "medium",
-    challenges: [
-      {
-        id: "friend-choice",
-        type: "choice",
-        area: "conversation",
-        prompt: "仕事終わりに友達を誘う自然な一言はどれ？",
-        support: "場面: 同僚と仲良くなってきたタイミング",
-        explanation: "`Do you want to ...` や `Would you like to ...` は定番です。",
-        xp: 14,
-        choices: [
-          { id: "a", text: "Do you want to grab dinner after work?", correct: true },
-          { id: "b", text: "You eat with me after working?" },
-          { id: "c", text: "Please go dinner now." }
-        ],
-        answer: ["a"]
-      },
-      {
-        id: "friend-order",
-        type: "order",
-        area: "grammar",
-        prompt: "自然な誘い文を作ろう",
-        support: "hang out / this weekend / Maybe / we can",
-        explanation: "`Maybe we can hang out this weekend.` は柔らかい誘い方です。",
-        xp: 13,
-        choices: [
-          { id: "maybe", text: "Maybe" },
-          { id: "we", text: "we" },
-          { id: "can", text: "can" },
-          { id: "hang", text: "hang out" },
-          { id: "weekend", text: "this weekend." }
-        ],
-        answer: ["Maybe", "we", "can", "hang out", "this weekend."]
-      },
-      {
-        id: "friend-listen",
-        type: "listen",
-        area: "listening",
-        prompt: "相手の返事として一番近い意味は？",
-        support: "I’m keen, but I finish pretty late tonight.",
-        explanation: "`I’m keen` はオーストラリア英語圏で『いいね、乗り気だよ』の感じで使われます。",
-        xp: 13,
-        choices: [
-          { id: "a", text: "行きたくないけど今夜は暇だよ" },
-          { id: "b", text: "いいね、でも今夜は終わるのが遅いんだ", correct: true },
-          { id: "c", text: "たぶん行けるけど朝が早いよ" }
-        ],
-        answer: ["b"]
-      }
-    ]
-  }
+export const coachSuggestions = [
+  "I want to improve my English for my working holiday.",
+  "Can I work at a cafe if my English is not perfect yet?",
+  "How can I make friends at work?"
+];
+
+export const speakingHints = [
+  "まずは短く1文で答える",
+  "知らない単語は簡単な言い換えでOK",
+  "止まっても言い直せば大丈夫",
+  "完璧さより通じることを優先する"
 ];

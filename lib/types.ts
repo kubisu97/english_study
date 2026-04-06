@@ -65,3 +65,37 @@ export type GameLesson = {
   difficulty: "easy" | "medium" | "hard";
   challenges: Challenge[];
 };
+
+export type VocabularyCard = {
+  id: string;
+  word: string;
+  meaning: string;
+  sample: string;
+  tip: string;
+};
+
+export type GrammarCard = {
+  id: string;
+  title: string;
+  pattern: string;
+  explanation: string;
+  goodExample: string;
+  commonMistake: string;
+  quizPrompt: string;
+  quizOptions: string[];
+  answer: string;
+};
+
+export type AppUser = {
+  id: "takuro" | "kazumi";
+  name: string;
+  password: string;
+  avatar?: string;
+};
+
+export type UserProgress = {
+  vocabularyIndex: number;
+  grammarIndex: number;
+  grammarScore: number;
+  conversationHistory: ConversationMessage[];
+};
