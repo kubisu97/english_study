@@ -102,6 +102,7 @@ export function StudyDashboard() {
   const [session, setSession] = useState<Session | null>(null);
   const [studyPack, setStudyPack] = useState<PersonalizedStudyPack>(fallbackStudyPack);
   const [packLoading, setPackLoading] = useState(false);
+  const autoExpandRef = useRef("");
   const recognitionRef = useRef<SpeechRecognitionInstance | null>(null);
 
   const weaknesses = starterWeaknesses;
@@ -191,6 +192,30 @@ export function StudyDashboard() {
     window.localStorage.setItem(fallbackProgressKey(loggedInUserId), JSON.stringify(progress));
   }, [loggedInUserId, progress, supabaseEnabled]);
 
+  useEffect(() => {
+    if (!loggedInUser) {
+      return;
+    }
+
+    const vocabularyRemaining = studyPack.vocabulary.length - (progress.vocabularyIndex + 1);
+    const grammarRemaining = studyPack.grammar.length - (progress.grammarIndex + 1);
+    const shouldExpand = vocabularyRemaining <= 3 || grammarRemaining <= 2;
+    const autoKey = `${loggedInUser.id}-${progress.vocabularyIndex}-${progress.grammarIndex}-${studyPack.vocabulary.length}-${studyPack.grammar.length}`;
+
+    if (!shouldExpand || packLoading || autoExpandRef.current === autoKey) {
+      return;
+    }
+
+    autoExpandRef.current = autoKey;
+    void loadPersonalizedPack(loggedInUser.name, progress, "append");
+  }, [
+    loggedInUser,
+    packLoading,
+    progress,
+    studyPack.grammar.length,
+    studyPack.vocabulary.length
+  ]);
+
   async function loadSupabaseProfiles() {
     if (!supabase) {
       return;
@@ -269,10 +294,10 @@ export function StudyDashboard() {
           progressRow.conversation_history ?? defaultProgress().conversationHistory
       };
       setProgress(nextProgress);
-      await loadPersonalizedPack(profileRow?.display_name ?? "Learner", nextProgress);
+      await loadPersonalizedPack(profileRow?.display_name ?? "Learner", nextProgress, "replace");
     } else {
       setProgress(defaultProgress());
-      await loadPersonalizedPack(profileRow?.display_name ?? "Learner", defaultProgress());
+      await loadPersonalizedPack(profileRow?.display_name ?? "Learner", defaultProgress(), "replace");
     }
   }
 
@@ -290,7 +315,12 @@ export function StudyDashboard() {
       setLoggedInUserId(storedSession);
       setSelectedUserId(storedSession);
       const savedProgress = window.localStorage.getItem(fallbackProgressKey(storedSession));
-      setProgress(savedProgress ? (JSON.parse(savedProgress) as UserProgress) : defaultProgress());
+      const nextProgress = savedProgress ? (JSON.parse(savedProgress) as UserProgress) : defaultProgress();
+      setProgress(nextProgress);
+      const localUser = (storedUsers ? (JSON.parse(storedUsers) as AppUser[]) : defaultUsers).find(
+        (user) => user.id === storedSession
+      );
+      void loadPersonalizedPack(localUser?.name ?? "Learner", nextProgress, "replace");
     }
   }
 
@@ -313,7 +343,11 @@ export function StudyDashboard() {
     }
   }
 
-  async function loadPersonalizedPack(userName: string, currentProgress: UserProgress) {
+  async function loadPersonalizedPack(
+    userName: string,
+    currentProgress: UserProgress,
+    mode: "replace" | "append" = "replace"
+  ) {
     setPackLoading(true);
 
     try {
@@ -324,14 +358,19 @@ export function StudyDashboard() {
         },
         body: JSON.stringify({
           userName,
-          progress: currentProgress
+          progress: currentProgress,
+          mode,
+          existingPack: studyPack
         })
       });
 
       const data = (await response.json()) as { pack?: PersonalizedStudyPack };
 
       if (data.pack) {
-        setStudyPack(data.pack);
+        const nextPack = data.pack;
+        setStudyPack((current) =>
+          mode === "append" ? mergeStudyPacks(current, nextPack) : nextPack
+        );
       }
     } finally {
       setPackLoading(false);
@@ -368,7 +407,7 @@ export function StudyDashboard() {
     const savedProgress = window.localStorage.getItem(fallbackProgressKey(selectedUser.id));
     const nextProgress = savedProgress ? (JSON.parse(savedProgress) as UserProgress) : defaultProgress();
     setProgress(nextProgress);
-    await loadPersonalizedPack(selectedUser.name, nextProgress);
+    await loadPersonalizedPack(selectedUser.name, nextProgress, "replace");
   }
 
   async function handleLogout() {
@@ -695,8 +734,8 @@ export function StudyDashboard() {
               <button className="primary-button" onClick={() => void goToNextWord()} type="button">
                 次の単語
               </button>
-              <button className="secondary-button" onClick={() => void loadPersonalizedPack(loggedInUser.name, progress)} type="button">
-                AIで更新
+              <button className="secondary-button" onClick={() => void loadPersonalizedPack(loggedInUser.name, progress, "append")} type="button">
+                もっと生成
               </button>
             </div>
           </div>
@@ -910,4 +949,38 @@ function labelForArea(area: Weakness["area"]) {
     default:
       return area;
   }
+}
+
+function mergeStudyPacks(
+  current: PersonalizedStudyPack,
+  incoming: PersonalizedStudyPack
+): PersonalizedStudyPack {
+  const vocabulary = dedupeByKey(
+    [...current.vocabulary, ...incoming.vocabulary],
+    (item) => `${item.word}-${item.meaning}`
+  );
+  const grammar = dedupeByKey(
+    [...current.grammar, ...incoming.grammar],
+    (item) => `${item.title}-${item.pattern}`
+  );
+  const conversationPrompts = Array.from(
+    new Set([...current.conversationPrompts, ...incoming.conversationPrompts])
+  );
+
+  return {
+    focusSummary: incoming.focusSummary || current.focusSummary,
+    vocabulary,
+    grammar,
+    conversationPrompts
+  };
+}
+
+function dedupeByKey<T>(items: T[], getKey: (item: T) => string) {
+  const map = new Map<string, T>();
+
+  for (const item of items) {
+    map.set(getKey(item), item);
+  }
+
+  return Array.from(map.values());
 }

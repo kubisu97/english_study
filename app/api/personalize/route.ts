@@ -6,6 +6,8 @@ export async function POST(request: Request) {
   const body = (await request.json()) as {
     userName?: string;
     progress?: UserProgress;
+    mode?: "replace" | "append";
+    existingPack?: PersonalizedStudyPack;
   };
 
   const apiKey = process.env.OPENAI_API_KEY;
@@ -31,6 +33,13 @@ Grammar index: ${body.progress?.grammarIndex ?? 0}
 Grammar score: ${body.progress?.grammarScore ?? 0}
 Recent conversation:
 ${recentConversation || "No recent conversation."}
+Generation mode: ${body.mode ?? "replace"}
+Existing vocabulary words:
+${body.existingPack?.vocabulary.map((item) => item.word).join(", ") || "None"}
+Existing grammar titles:
+${body.existingPack?.grammar.map((item) => item.title).join(", ") || "None"}
+Existing conversation prompts:
+${body.existingPack?.conversationPrompts.join(" | ") || "None"}
 
 Return JSON only with this shape:
 {
@@ -55,12 +64,12 @@ Return JSON only with this shape:
 }
 
 Rules:
-- Generate exactly 12 vocabulary items.
-- Generate exactly 10 grammar items.
-- Generate exactly 8 conversation prompts.
+- If mode is replace, generate exactly 12 vocabulary items, 10 grammar items, and 8 conversation prompts.
+- If mode is append, generate exactly 8 new vocabulary items, 6 new grammar items, and 5 new conversation prompts.
 - Make everything practical for work, housing, or making friends.
 - Keep the English simple and realistic.
 - Keep Japanese explanations easy to understand.
+- Avoid duplicates with existing content.
 `;
 
   const response = await fetch("https://api.openai.com/v1/responses", {
