@@ -55,8 +55,9 @@ Return JSON only with this shape:
 }
 
 Rules:
-- Generate exactly 4 vocabulary items.
-- Generate exactly 3 grammar items.
+- Generate exactly 12 vocabulary items.
+- Generate exactly 10 grammar items.
+- Generate exactly 8 conversation prompts.
 - Make everything practical for work, housing, or making friends.
 - Keep the English simple and realistic.
 - Keep Japanese explanations easy to understand.
